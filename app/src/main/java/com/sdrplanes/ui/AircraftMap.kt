@@ -22,13 +22,8 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.sdrplanes.R
 import com.sdrplanes.decode.LatLon
 import com.sdrplanes.model.Aircraft
-import com.sdrplanes.ui.theme.NightSky
-import com.sdrplanes.ui.theme.Phosphor
-import com.sdrplanes.ui.theme.PhosphorDim
-import com.sdrplanes.ui.theme.Plum
-import com.sdrplanes.ui.theme.RadarTeal
-import com.sdrplanes.ui.theme.Rust
-import com.sdrplanes.ui.theme.Sunset
+import com.sdrplanes.ui.theme.HudPalette
+import com.sdrplanes.ui.theme.hud
 import com.sdrplanes.ui.theme.isEmergencySquawk
 import org.maplibre.android.camera.CameraUpdateFactory
 import org.maplibre.android.geometry.LatLng
@@ -36,6 +31,8 @@ import org.maplibre.android.maps.MapLibreMap
 import org.maplibre.android.maps.MapView
 import org.maplibre.android.maps.Style
 import org.maplibre.android.style.expressions.Expression.color
+import org.maplibre.android.style.expressions.Expression.eq
+import org.maplibre.android.style.expressions.Expression.not
 import org.maplibre.android.style.expressions.Expression.get
 import org.maplibre.android.style.expressions.Expression.interpolate
 import org.maplibre.android.style.expressions.Expression.linear
@@ -62,6 +59,7 @@ import org.maplibre.android.style.layers.PropertyFactory.iconHaloBlur
 import org.maplibre.android.style.layers.PropertyFactory.iconHaloColor
 import org.maplibre.android.style.layers.PropertyFactory.iconHaloWidth
 import org.maplibre.android.style.layers.PropertyFactory.iconIgnorePlacement
+import org.maplibre.android.style.layers.PropertyFactory.iconOpacity
 import org.maplibre.android.style.layers.PropertyFactory.iconImage
 import org.maplibre.android.style.layers.PropertyFactory.iconRotate
 import org.maplibre.android.style.layers.PropertyFactory.iconRotationAlignment
@@ -95,13 +93,17 @@ import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.sin
 
-/** Dark base style; every layer is recoloured into the app palette in [retroRecolor]. */
-private const val STYLE_URL = "https://tiles.openfreemap.org/styles/dark"
+/** Base styles; every layer is recoloured into the active palette in [retroRecolor]. */
+const val STYLE_URL_DARK = "https://tiles.openfreemap.org/styles/dark"
+const val STYLE_URL_LIGHT = "https://tiles.openfreemap.org/styles/positron"
+fun styleUrl(p: HudPalette) = if (p.isDark) STYLE_URL_DARK else STYLE_URL_LIGHT
+
 private const val SRC_PLANES = "planes"
 private const val SRC_TRAILS = "trails"
 private const val SRC_RX = "receiver"
 private const val SRC_RINGS = "rings"
 private const val LAYER_PLANES = "planes-layer"
+private const val LAYER_GROUND = "ground-layer"
 private const val IMG_PLANE = "plane"
 private const val MIN_FOCUS_ZOOM = 8.0
 private val RING_KM = listOf(50, 100, 150, 200)
@@ -123,6 +125,7 @@ fun AircraftMap(
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
+    val palette = hud
     val mapView = remember { MapView(context).apply { onCreate(null) } }
     var map by remember { mutableStateOf<MapLibreMap?>(null) }
     var style by remember { mutableStateOf<Style?>(null) }
@@ -149,21 +152,27 @@ fun AircraftMap(
     LaunchedEffect(mapView) {
         mapView.getMapAsync { m ->
             m.uiSettings.isAttributionEnabled = true
-            m.uiSettings.setAttributionTintColor(RadarTeal.toArgb())
             m.uiSettings.isLogoEnabled = false
             m.uiSettings.isCompassEnabled = false
             m.addOnMapClickListener { point ->
                 val p = m.projection.toScreenLocation(point)
-                val hits = m.queryRenderedFeatures(RectF(p.x - 40, p.y - 40, p.x + 40, p.y + 40), LAYER_PLANES)
+                val hits = m.queryRenderedFeatures(RectF(p.x - 40, p.y - 40, p.x + 40, p.y + 40), LAYER_PLANES, LAYER_GROUND)
                 currentOnSelect(hits.firstOrNull()?.getStringProperty("icao")?.toIntOrNull(16))
                 true
             }
-            m.setStyle(Style.Builder().fromUri(STYLE_URL)) { st ->
-                retroRecolor(st)
-                installLayers(context, st)
-                style = st
-            }
             map = m
+        }
+    }
+
+    // (Re)load the base style when the map is ready or the theme changes.
+    LaunchedEffect(map, palette) {
+        val m = map ?: return@LaunchedEffect
+        style = null
+        m.uiSettings.setAttributionTintColor(palette.secondary.toArgb())
+        m.setStyle(Style.Builder().fromUri(styleUrl(palette))) { st ->
+            retroRecolor(st, palette)
+            installLayers(context, st, palette)
+            style = st
         }
     }
 
@@ -195,57 +204,68 @@ fun AircraftMap(
 }
 
 /**
- * Repaints the OpenFreeMap "dark" style in the palette: night-sky land, teal-tinted water,
- * plum land use, teal roads, sunset airports and borders, phosphor labels.
+ * Repaints the base style in the palette: background land, secondary-tinted water, depth
+ * land use, secondary roads, accent airports, dim borders and labels.
  */
-private fun retroRecolor(st: Style) {
-    val water = lerp(NightSky, RadarTeal, 0.28f).toArgb()
+private fun retroRecolor(st: Style, p: HudPalette) {
+    val water = lerp(p.background, p.secondary, if (p.isDark) 0.28f else 0.3f).toArgb()
+    val accent = p.accent.toArgb()
+    val depth = p.depth.toArgb()
+    val secondary = p.secondary.toArgb()
+    val dim = p.textDim.toArgb()
     for (layer in st.layers) {
         val id = layer.id
         when (layer) {
-            is BackgroundLayer -> layer.setProperties(backgroundColor(NightSky.toArgb()))
+            is BackgroundLayer -> layer.setProperties(backgroundColor(p.background.toArgb()))
             is FillLayer -> layer.setProperties(
                 *when {
-                    id == "water" -> arrayOf(fillColor(water), fillOpacity(1f))
-                    id.startsWith("aeroway") -> arrayOf(fillColor(Sunset.toArgb()), fillOpacity(0.22f))
-                    id == "building" -> arrayOf(fillColor(Plum.toArgb()), fillOpacity(0.45f))
-                    else -> arrayOf(fillColor(Plum.toArgb()), fillOpacity(0.22f))
+                    id == "water" || id.startsWith("water") -> arrayOf(fillColor(water), fillOpacity(1f))
+                    id.startsWith("aeroway") -> arrayOf(fillColor(accent), fillOpacity(0.22f))
+                    id == "building" -> arrayOf(fillColor(depth), fillOpacity(if (p.isDark) 0.45f else 0.35f))
+                    else -> arrayOf(fillColor(depth), fillOpacity(if (p.isDark) 0.22f else 0.18f))
                 }
             )
             is LineLayer -> layer.setProperties(
                 *when {
                     id.contains("casing") -> arrayOf(visibility(Property.NONE))
-                    id.startsWith("aeroway") -> arrayOf(lineColor(Sunset.toArgb()), lineOpacity(0.75f))
-                    id == "waterway" -> arrayOf(lineColor(water), lineOpacity(1f))
-                    id.startsWith("highway_motorway") -> arrayOf(lineColor(RadarTeal.toArgb()), lineOpacity(0.6f))
-                    id.startsWith("highway") || id.startsWith("road") -> arrayOf(lineColor(RadarTeal.toArgb()), lineOpacity(0.3f))
-                    id.startsWith("railway") -> arrayOf(lineColor(Plum.toArgb()), lineOpacity(0.9f))
-                    // Muted, so sunset/rust stay reserved for aircraft, trails and HUD.
-                    id.startsWith("boundary_country") -> arrayOf(lineColor(PhosphorDim.toArgb()), lineOpacity(0.35f))
-                    id.startsWith("boundary") -> arrayOf(lineColor(PhosphorDim.toArgb()), lineOpacity(0.15f))
-                    else -> arrayOf(lineColor(RadarTeal.toArgb()), lineOpacity(0.3f))
+                    id.startsWith("aeroway") -> arrayOf(lineColor(accent), lineOpacity(0.75f))
+                    id.startsWith("waterway") -> arrayOf(lineColor(water), lineOpacity(1f))
+                    id.startsWith("highway_motorway") -> arrayOf(lineColor(secondary), lineOpacity(0.6f))
+                    id.startsWith("highway") || id.startsWith("road") -> arrayOf(lineColor(secondary), lineOpacity(0.3f))
+                    id.startsWith("railway") -> arrayOf(lineColor(depth), lineOpacity(0.9f))
+                    // Muted, so accent/alert stay reserved for aircraft, trails and HUD.
+                    id.startsWith("boundary_country") -> arrayOf(lineColor(dim), lineOpacity(0.35f))
+                    id.startsWith("boundary") -> arrayOf(lineColor(dim), lineOpacity(0.15f))
+                    else -> arrayOf(lineColor(secondary), lineOpacity(0.3f))
                 }
             )
             is SymbolLayer -> layer.setProperties(
                 *when {
                     id.startsWith("road") || id.startsWith("highway_name") -> arrayOf(visibility(Property.NONE))
-                    id == "water_name" -> arrayOf(textColor(RadarTeal.toArgb()))
-                    id.startsWith("place_country") -> arrayOf(textColor(PhosphorDim.toArgb()), textOpacity(0.9f))
-                    id.startsWith("place_city") || id == "place_state" -> arrayOf(textColor(Phosphor.toArgb()), textOpacity(0.8f))
-                    else -> arrayOf(textColor(PhosphorDim.toArgb()), textOpacity(0.7f))
+                    id.startsWith("water_name") -> arrayOf(textColor(secondary))
+                    id.startsWith("place_country") -> arrayOf(textColor(dim), textOpacity(0.9f))
+                    id.startsWith("place_city") || id == "place_state" -> arrayOf(textColor(p.text.toArgb()), textOpacity(0.8f))
+                    else -> arrayOf(textColor(dim), textOpacity(0.7f))
                 },
-                textHaloColor(NightSky.toArgb()),
+                textHaloColor(p.background.toArgb()),
                 textHaloWidth(1.2f),
             )
         }
     }
 }
 
-private fun installLayers(context: android.content.Context, st: Style) {
+private fun installLayers(context: android.content.Context, st: Style, p: HudPalette) {
     val density = context.resources.displayMetrics.density
     val icon = ContextCompat.getDrawable(context, R.drawable.ic_plane)!!
         .toBitmap((28 * density).toInt(), (28 * density).toInt())
     st.addImage(IMG_PLANE, icon, true) // SDF: lets us tint by altitude
+
+    val bg = p.background.toArgb()
+    val text = p.text.toArgb()
+    val accent = p.accent.toArgb()
+    val alert = p.alert.toArgb()
+    val secondary = p.secondary.toArgb()
+    val dim = p.textDim.toArgb()
 
     st.addSource(GeoJsonSource(SRC_RINGS))
     st.addSource(GeoJsonSource(SRC_TRAILS))
@@ -255,59 +275,86 @@ private fun installLayers(context: android.content.Context, st: Style) {
     // Radar range rings around the receiver.
     st.addLayer(
         LineLayer("rings-layer", SRC_RINGS).withProperties(
-            lineColor(RadarTeal.toArgb()), lineWidth(1.2f), lineOpacity(0.55f), lineDasharray(arrayOf(4f, 3f)),
+            lineColor(secondary), lineWidth(1.2f), lineOpacity(0.55f), lineDasharray(arrayOf(4f, 3f)),
         )
     )
     st.addLayer(
         SymbolLayer("rings-label-layer", SRC_RINGS).withProperties(
             textField(get("label")), textFont(MAP_FONT), textSize(10f), textLetterSpacing(0.1f),
-            textColor(RadarTeal.toArgb()), textHaloColor(NightSky.toArgb()), textHaloWidth(1.5f),
+            textColor(secondary), textHaloColor(bg), textHaloWidth(1.5f),
             textAllowOverlap(true),
         )
     )
     st.addLayer(
         LineLayer("trails-layer", SRC_TRAILS).withProperties(
-            lineColor(Sunset.toArgb()), lineWidth(2f), lineOpacity(0.5f),
+            lineColor(accent), lineWidth(2f), lineOpacity(0.5f),
         )
     )
-    // Receiver: soft teal glow with a phosphor core.
+    // Receiver: soft glow with a text-coloured core.
     st.addLayer(
         CircleLayer("receiver-glow-layer", SRC_RX).withProperties(
-            circleRadius(18f), circleColor(RadarTeal.toArgb()), circleOpacity(0.35f), circleBlur(1f),
+            circleRadius(18f), circleColor(secondary), circleOpacity(0.35f), circleBlur(1f),
         )
     )
     st.addLayer(
         CircleLayer("receiver-layer", SRC_RX).withProperties(
-            circleRadius(5f), circleColor(Phosphor.toArgb()),
-            circleStrokeColor(RadarTeal.toArgb()), circleStrokeWidth(2f),
+            circleRadius(5f), circleColor(text),
+            circleStrokeColor(secondary), circleStrokeWidth(2f),
         )
     )
 
     val selected = get("selected")
     val emergency = get("emergency")
+    val ground = eq(get("ground"), literal(true))
+
+    // Surface traffic: small, muted and underneath, so airports don't clutter the scope.
     st.addLayer(
-        SymbolLayer(LAYER_PLANES, SRC_PLANES).withProperties(
+        SymbolLayer(LAYER_GROUND, SRC_PLANES).withFilter(ground).withProperties(
+            iconImage(IMG_PLANE),
+            iconRotate(get("track")),
+            iconRotationAlignment(Property.ICON_ROTATION_ALIGNMENT_MAP),
+            iconAllowOverlap(true),
+            iconIgnorePlacement(true),
+            iconSize(switchCase(selected, literal(1.0f), literal(0.6f))),
+            iconColor(switchCase(emergency, color(alert), color(lerp(p.secondary, p.background, 0.25f).toArgb()))),
+            iconOpacity(0.85f),
+            iconHaloColor(switchCase(selected, color(accent), color(bg))),
+            iconHaloWidth(switchCase(selected, literal(3f), literal(1f))),
+            textField(get("label")),
+            textFont(MAP_FONT),
+            textTransform(Property.TEXT_TRANSFORM_UPPERCASE),
+            textSize(9f),
+            textOffset(arrayOf(0f, 1.3f)),
+            textAnchor(Property.TEXT_ANCHOR_TOP),
+            textOptional(true),
+            textColor(switchCase(selected, color(accent), color(dim))),
+            textHaloColor(bg),
+            textHaloWidth(1.4f),
+        )
+    )
+    st.addLayer(
+        SymbolLayer(LAYER_PLANES, SRC_PLANES).withFilter(not(ground)).withProperties(
             iconImage(IMG_PLANE),
             iconRotate(get("track")),
             iconRotationAlignment(Property.ICON_ROTATION_ALIGNMENT_MAP),
             iconAllowOverlap(true),
             iconIgnorePlacement(true),
             iconSize(switchCase(selected, literal(1.4f), literal(1.0f))),
-            // Altitude ramp teal → phosphor → sunset → rust (see theme.altitudeColor); rust for emergencies.
+            // Altitude ramp (see HudPalette.altitudeColor); alert colour for emergencies.
             iconColor(
                 switchCase(
-                    emergency, color(Rust.toArgb()),
+                    emergency, color(alert),
                     interpolate(
                         linear(), get("alt"),
-                        stop(-1, color(PhosphorDim.toArgb())),
-                        stop(0, color(RadarTeal.toArgb())),
-                        stop(10000, color(Phosphor.toArgb())),
-                        stop(25000, color(Sunset.toArgb())),
-                        stop(40000, color(Rust.toArgb())),
+                        stop(-1, color(dim)),
+                        stop(0, color(secondary)),
+                        stop(10000, color(text)),
+                        stop(25000, color(accent)),
+                        stop(40000, color(alert)),
                     ),
                 )
             ),
-            iconHaloColor(switchCase(selected, color(Sunset.toArgb()), color(NightSky.toArgb()))),
+            iconHaloColor(switchCase(selected, color(accent), color(bg))),
             iconHaloWidth(switchCase(selected, literal(3f), literal(1.5f))),
             iconHaloBlur(switchCase(selected, literal(2f), literal(0f))),
             textField(get("label")),
@@ -320,12 +367,12 @@ private fun installLayers(context: android.content.Context, st: Style) {
             textOptional(true),
             textColor(
                 switchCase(
-                    emergency, color(Rust.toArgb()),
-                    selected, color(Sunset.toArgb()),
-                    color(Phosphor.toArgb()),
+                    emergency, color(alert),
+                    selected, color(accent),
+                    color(text),
                 )
             ),
-            textHaloColor(NightSky.toArgb()),
+            textHaloColor(bg),
             textHaloWidth(1.6f),
         )
     )
@@ -338,12 +385,13 @@ private fun planeFeatures(aircraft: List<Aircraft>, selected: Int?): FeatureColl
             addStringProperty("icao", a.icaoHex)
             addStringProperty("label", buildString {
                 append(a.label)
-                a.altitudeFt?.let { append('\n').append(formatAltitude(it)) }
+                if (a.onGround) append("\nGND") else a.altitudeFt?.let { append('\n').append(formatAltitude(it)) }
             })
             addNumberProperty("track", a.trackDeg ?: 0.0)
             addNumberProperty("alt", a.altitudeFt ?: -1)
             addBooleanProperty("selected", a.icao == selected)
-            addBooleanProperty("emergency", isEmergencySquawk(a.squawk))
+            addBooleanProperty("emergency", isEmergencySquawk(a.squawk) || a.tcasRa != null)
+            addBooleanProperty("ground", a.onGround)
         }
     })
 

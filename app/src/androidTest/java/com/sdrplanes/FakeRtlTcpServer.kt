@@ -12,15 +12,19 @@ import kotlin.random.Random
  * Minimal on-device rtl_tcp server: sends the "RTL0" header (R820T), records the 5-byte
  * commands it receives and loops [iq] until closed.
  */
-class FakeRtlTcpServer(private val iq: ByteArray) : AutoCloseable {
-    private val server = ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"))
+class FakeRtlTcpServer(private val iq: ByteArray, port: Int = 0) : AutoCloseable {
+    private val server = ServerSocket().apply {
+        reuseAddress = true
+        bind(java.net.InetSocketAddress(InetAddress.getByName("127.0.0.1"), port), 1)
+    }
+    @Volatile private var client: java.net.Socket? = null
     val port: Int get() = server.localPort
     val commands: MutableList<Pair<Int, Int>> = Collections.synchronizedList(mutableListOf())
 
     init {
         thread(isDaemon = true, name = "fake-rtl_tcp") {
             runCatching {
-                server.accept().use { s ->
+                server.accept().also { client = it }.use { s ->
                     thread(isDaemon = true) {
                         runCatching {
                             val input = DataInputStream(s.getInputStream())
@@ -39,7 +43,10 @@ class FakeRtlTcpServer(private val iq: ByteArray) : AutoCloseable {
         }
     }
 
-    override fun close() = server.close()
+    override fun close() {
+        server.close()
+        runCatching { client?.close() } // drop the connection like a crashed server
+    }
 }
 
 /** 2 MS/s unsigned 8-bit IQ with Mode S frames over light noise. */

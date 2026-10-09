@@ -3,16 +3,18 @@ package com.sdrplanes.sdr
 /** Gain in tenths of a dB, or null for tuner AGC. */
 data class TunerConfig(
     val frequencyHz: Long = 1_090_000_000L,
-    val sampleRate: Int = 2_000_000,
+    val sampleRate: Int = 2_400_000,
     val gainTenthsDb: Int? = 496,
     val ppm: Int = 0,
+    /** 4.5 V on the antenna port for an LNA/filter (RTL-SDR Blog dongles). */
+    val biasTee: Boolean = false,
 )
 
 data class TunerInfo(val tunerName: String, val gainCount: Int)
 
 /**
- * A source of 8-bit unsigned interleaved IQ samples. Implementations: [RtlTcpSampleSource]
- * (driver app or any rtl_tcp server); later a native librtlsdr backend.
+ * A source of 8-bit unsigned interleaved IQ samples. Implementations: [UsbSampleSource]
+ * (built-in USB driver) and [RtlTcpSampleSource] (driver app or any rtl_tcp server).
  */
 interface SampleSource {
     val description: String

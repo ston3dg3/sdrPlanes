@@ -9,12 +9,17 @@ import kotlinx.coroutines.flow.asStateFlow
 sealed interface ReceiverStatus {
     data object Idle : ReceiverStatus
     data class Connecting(val target: String) : ReceiverStatus
-    data class Running(val target: String, val tuner: String, val gain: String) : ReceiverStatus
+    data class Running(
+        val target: String, val tuner: String, val gain: String,
+        val sampleRate: Int, val biasTee: Boolean,
+    ) : ReceiverStatus
+    /** The source dropped; retrying in [inSeconds]. */
+    data class Reconnecting(val target: String, val message: String, val inSeconds: Int) : ReceiverStatus
     data class Error(val message: String) : ReceiverStatus
 }
 
 data class ReceiverStats(
-    val messagesPerSec: Int = 0,
+    val messagesPerSec: Float = 0f,
     val totalMessages: Long = 0,
     val correctedMessages: Long = 0,
     val withPosition: Int = 0,
@@ -31,6 +36,9 @@ object ReceiverState {
     private val _stats = MutableStateFlow(ReceiverStats())
     val stats: StateFlow<ReceiverStats> = _stats.asStateFlow()
 
+    private val _recording = MutableStateFlow<RecordingState>(RecordingState.Idle)
+    val recording: StateFlow<RecordingState> = _recording.asStateFlow()
+
     private val _receiverPosition = MutableStateFlow<LatLon?>(null)
     val receiverPosition: StateFlow<LatLon?> = _receiverPosition.asStateFlow()
 
@@ -40,4 +48,5 @@ object ReceiverState {
         _stats.value = stats
     }
     fun setReceiverPosition(p: LatLon?) { _receiverPosition.value = p }
+    fun setRecording(r: RecordingState) { _recording.value = r }
 }

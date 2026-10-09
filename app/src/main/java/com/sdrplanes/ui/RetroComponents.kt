@@ -34,7 +34,11 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.text.TextAutoSize
+import androidx.compose.foundation.text.BasicText
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
@@ -54,6 +58,7 @@ import com.sdrplanes.ui.theme.Phosphor
 import com.sdrplanes.ui.theme.Plum
 import com.sdrplanes.ui.theme.RadarTeal
 import com.sdrplanes.ui.theme.Sunset
+import com.sdrplanes.ui.theme.hud
 import kotlin.math.log10
 
 /** Cut-corner shape used by all HUD panels: clipped top-left and bottom-right. */
@@ -83,32 +88,50 @@ fun HudPanel(
 
 /** Small uppercase teal caption above a value. */
 @Composable
-fun HudLabel(text: String, color: Color = RadarTeal, modifier: Modifier = Modifier) {
-    Text(text.uppercase(), style = MaterialTheme.typography.labelSmall, color = color, modifier = modifier)
+fun HudLabel(text: String, color: Color = RadarTeal, modifier: Modifier = Modifier, maxLines: Int = Int.MAX_VALUE) {
+    Text(
+        text.uppercase(), style = MaterialTheme.typography.labelSmall, color = color, modifier = modifier,
+        maxLines = maxLines, overflow = TextOverflow.Ellipsis,
+    )
 }
 
 /** Label + value pair used in readout grids. */
 @Composable
 fun Readout(label: String, value: String, modifier: Modifier = Modifier, valueColor: Color = Phosphor) {
     Column(modifier) {
-        HudLabel(label)
-        Text(value, style = MaterialTheme.typography.bodyLarge, color = valueColor)
+        HudLabel(label, maxLines = 1)
+        // One line that shrinks to fit its column, so long values never spill into the next one.
+        val style = MaterialTheme.typography.bodyLarge
+        BasicText(
+            value,
+            style = style.copy(color = valueColor),
+            maxLines = 1,
+            autoSize = TextAutoSize.StepBased(minFontSize = 10.sp, maxFontSize = style.fontSize, stepSize = 0.5.sp),
+            modifier = Modifier.padding(end = 4.dp),
+        )
     }
 }
 
 /** Status LED; pulses when [blinking]. */
 @Composable
 fun StatusLed(color: Color, blinking: Boolean, modifier: Modifier = Modifier) {
-    val transition = rememberInfiniteTransition(label = "led")
-    val pulse by transition.animateFloat(
-        initialValue = 1f, targetValue = 0.25f,
-        animationSpec = infiniteRepeatable(tween(600, easing = LinearEasing), RepeatMode.Reverse),
-        label = "led-alpha",
-    )
+    // The animation only exists while blinking, and is read in the draw phase, so an idle
+    // or steady LED doesn't recompose the HUD every frame.
+    val alpha: () -> Float = if (blinking) {
+        val pulse = rememberInfiniteTransition(label = "led").animateFloat(
+            initialValue = 1f, targetValue = 0.25f,
+            animationSpec = infiniteRepeatable(tween(600, easing = LinearEasing), RepeatMode.Reverse),
+            label = "led-alpha",
+        )
+        val read: () -> Float = { pulse.value }
+        read
+    } else {
+        { 1f }
+    }
     Box(
         modifier
             .size(10.dp)
-            .alpha(if (blinking) pulse else 1f)
+            .graphicsLayer { this.alpha = alpha() }
             .shadow(6.dp, CircleShape, ambientColor = color, spotColor = color)
             .background(color, CircleShape)
     )
@@ -190,7 +213,9 @@ fun HudDialog(
             )
             GlowDivider()
             Spacer(Modifier.height(12.dp))
-            content()
+            // Takes only the height left over, so a long (scrolling) body never pushes the
+            // actions off the dialog.
+            Column(Modifier.weight(1f, fill = false)) { content() }
             Spacer(Modifier.height(16.dp))
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.End)) { actions() }
         }
@@ -211,12 +236,15 @@ fun GlowDivider(color: Color = Sunset, modifier: Modifier = Modifier) {
 /** Full-screen CRT scanlines + vignette. Draw-only, so it never intercepts touches. */
 @Composable
 fun CrtOverlay(modifier: Modifier = Modifier) {
+    val p = hud
+    // Scanlines: background-coloured on the dark scope, faint ink on the light one.
+    val line = if (p.isDark) p.background.copy(alpha = 0.16f) else p.text.copy(alpha = 0.035f)
+    val vignette = p.background.copy(alpha = if (p.isDark) 0.55f else 0.25f)
     Spacer(
         modifier
             .fillMaxSize()
             .drawBehind {
                 val step = 3.dp.toPx()
-                val line = NightSky.copy(alpha = 0.16f)
                 var y = 0f
                 while (y < size.height) {
                     drawLine(line, Offset(0f, y), Offset(size.width, y), strokeWidth = 1f)
@@ -225,12 +253,28 @@ fun CrtOverlay(modifier: Modifier = Modifier) {
                 drawRect(
                     Brush.radialGradient(
                         0.55f to Color.Transparent,
-                        1f to NightSky.copy(alpha = 0.55f),
+                        1f to vignette,
                         center = center,
                         radius = size.maxDimension * 0.75f,
                     )
                 )
             }
+    )
+}
+
+/** Small cut-corner toggle used for filters; filled when [selected]. */
+@Composable
+fun HudChip(text: String, selected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier, accent: Color = Sunset) {
+    val shape = CutCornerShape(topStart = 6.dp, bottomEnd = 6.dp)
+    Text(
+        text.uppercase(),
+        style = MaterialTheme.typography.labelMedium,
+        color = if (selected) NightSky else accent,
+        modifier = modifier
+            .background(if (selected) accent else Color.Transparent, shape)
+            .border(1.dp, accent.copy(alpha = if (selected) 1f else 0.7f), shape)
+            .clickable(role = Role.Checkbox, onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 6.dp),
     )
 }
 

@@ -5,10 +5,12 @@ import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.rule.GrantPermissionRule
-import com.sdrplanes.sdr.TunerConfig
 import com.sdrplanes.service.ReceiverService
 import com.sdrplanes.service.ReceiverState
 import com.sdrplanes.service.ReceiverStatus
+import com.sdrplanes.service.Settings
+import com.sdrplanes.service.SourceMode
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -26,6 +28,22 @@ class ReceiverPipelineTest {
     )
 
     private val context get() = InstrumentationRegistry.getInstrumentation().targetContext
+    private val savedSettings = Settings.load(InstrumentationRegistry.getInstrumentation().targetContext)
+
+    @After
+    fun restoreSettings() {
+        ReceiverService.stop(context)
+        Settings.save(context, savedSettings)
+    }
+
+    /** The service reads its source from the saved settings. */
+    private fun startNetwork(port: Int, gainTenthsDb: Int? = 496) {
+        Settings.save(
+            context,
+            Settings(SourceMode.NETWORK, "127.0.0.1", port, gainTenthsDb, ppm = 0, sampleRate = 2_000_000),
+        )
+        ReceiverService.start(context)
+    }
 
     private fun waitFor(timeoutMs: Long = 10_000, condition: () -> Boolean): Boolean {
         val end = System.currentTimeMillis() + timeoutMs
@@ -49,7 +67,7 @@ class ReceiverPipelineTest {
         FakeRtlTcpServer(iq).use { server ->
             // Foreground service starts must come from a visible app.
             ActivityScenario.launch(MainActivity::class.java).use {
-                ReceiverService.start(context, "127.0.0.1", server.port, TunerConfig(gainTenthsDb = 496))
+                startNetwork(server.port)
 
                 val running = waitFor { ReceiverState.status.value is ReceiverStatus.Running }
                 assertTrue("never reached Running: ${ReceiverState.status.value}", running)
@@ -79,12 +97,35 @@ class ReceiverPipelineTest {
     }
 
     @Test
-    fun connectionFailureReportsError() {
+    fun connectionFailureSchedulesReconnect() {
         ActivityScenario.launch(MainActivity::class.java).use {
-            // Nothing listens on port 1 → retries are exhausted and the service reports an error.
-            ReceiverService.start(context, "127.0.0.1", 1, TunerConfig())
-            val failed = waitFor(30_000) { ReceiverState.status.value is ReceiverStatus.Error }
-            assertTrue("status: ${ReceiverState.status.value}", failed)
+            // Nothing listens on port 1: connect retries are exhausted, then the service backs off and retries.
+            startNetwork(1)
+            val retrying = waitFor(30_000) { ReceiverState.status.value is ReceiverStatus.Reconnecting }
+            assertTrue("status: ${ReceiverState.status.value}", retrying)
+            ReceiverService.stop(context)
+            assertTrue(waitFor { ReceiverState.status.value == ReceiverStatus.Idle })
+        }
+    }
+
+    @Test
+    fun reconnectsAfterServerDrops() {
+        val iq = SyntheticIq.modulate(listOf("8D4840D6202CC371C32CE0576098"))
+        ActivityScenario.launch(MainActivity::class.java).use {
+            val first = FakeRtlTcpServer(iq)
+            val port = first.port
+            startNetwork(port)
+            assertTrue(waitFor { ReceiverState.aircraft.value.any { it.icaoHex == "4840D6" } })
+            first.close()
+            assertTrue(waitFor(20_000) { ReceiverState.status.value is ReceiverStatus.Reconnecting })
+            // A new server on the same port: the service picks it up and keeps the aircraft.
+            FakeRtlTcpServer(iq, port).use {
+                assertTrue(
+                    "status: ${ReceiverState.status.value}",
+                    waitFor(30_000) { ReceiverState.status.value is ReceiverStatus.Running },
+                )
+                assertTrue(ReceiverState.aircraft.value.any { it.icaoHex == "4840D6" })
+            }
         }
     }
 }

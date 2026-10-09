@@ -52,12 +52,50 @@ object Crc24 {
     }
 
     /**
+     * Syndrome -> two bit indices (packed as `a shl 8 or b`) for double-bit errors in
+     * 112-bit frames. Mode S CRC has Hamming distance 6 over 112 bits, so every 1- and
+     * 2-bit syndrome is unique; any collision is dropped anyway for safety.
+     */
+    private val doubleBitSyndromes112: Map<Int, Int> by lazy {
+        val seen = HashMap<Int, Int>()
+        val dup = HashSet<Int>()
+        for (a in 5 until 112) {
+            for (b in a + 1 until 112) {
+                val m = ByteArray(14)
+                m[a / 8] = (0x80 ushr (a % 8)).toByte()
+                m[b / 8] = (m[b / 8].toInt() or (0x80 ushr (b % 8))).toByte()
+                val s = residual(m, 112)
+                if (s in singleBitSyndromes112 || seen.put(s, (a shl 8) or b) != null) dup += s
+            }
+        }
+        seen - dup
+    }
+
+    /**
      * Tries to repair a single flipped bit in a 112-bit frame whose residual should be 0.
      * Returns true (and modifies [msg]) on success.
      */
     fun fixSingleBit112(msg: ByteArray, residual: Int): Boolean {
         val bit = singleBitSyndromes112[residual] ?: return false
-        msg[bit / 8] = (msg[bit / 8].toInt() xor (0x80 ushr (bit % 8))).toByte()
+        flip(msg, bit)
         return true
+    }
+
+    /**
+     * Repairs up to two flipped bits in a 112-bit frame whose residual should be 0.
+     * Returns the number of bits corrected (0 = not repairable; [msg] is unchanged).
+     */
+    fun fixBits112(msg: ByteArray, residual: Int, maxBits: Int = 2): Int {
+        if (residual == 0) return 0
+        if (fixSingleBit112(msg, residual)) return 1
+        if (maxBits < 2) return 0
+        val pair = doubleBitSyndromes112[residual] ?: return 0
+        flip(msg, pair ushr 8)
+        flip(msg, pair and 0xFF)
+        return 2
+    }
+
+    private fun flip(msg: ByteArray, bit: Int) {
+        msg[bit / 8] = (msg[bit / 8].toInt() xor (0x80 ushr (bit % 8))).toByte()
     }
 }

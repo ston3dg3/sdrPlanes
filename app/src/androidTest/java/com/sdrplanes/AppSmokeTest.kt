@@ -56,7 +56,7 @@ class AppSmokeTest {
     fun settingsRoundTrip() {
         val original = Settings.load(context)
         try {
-            val s = Settings(SourceMode.NETWORK, "10.0.2.2", 1234, gainTenthsDb = null, ppm = -3)
+            val s = Settings(SourceMode.NETWORK, "10.0.2.2", 1234, gainTenthsDb = null, ppm = -3, sampleRate = 2_000_000, biasTee = true)
             Settings.save(context, s)
             assertEquals(s, Settings.load(context))
         } finally {
@@ -68,7 +68,7 @@ class AppSmokeTest {
     fun driverIntentAndErrors() {
         val i = RtlSdrDriver.startIntent(TunerConfig())
         assertEquals(Intent.ACTION_VIEW, i.action)
-        assertEquals("iqsrc://-a 127.0.0.1 -p 1234 -n 1 -f 1090000000 -s 2000000", i.dataString)
+        assertEquals("iqsrc://-a 127.0.0.1 -p 1234 -n 1 -f 1090000000 -s 2400000 -g 496", i.dataString)
         assertNull(RtlSdrDriver.resultError(Activity.RESULT_OK, null))
         val err = Intent().putExtra("detailed_exception_message", "no device")
         assertTrue(RtlSdrDriver.resultError(Activity.RESULT_CANCELED, err)!!.contains("no device"))

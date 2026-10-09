@@ -9,7 +9,7 @@ import kotlin.math.max
 
 data class LatLon(val lat: Double, val lon: Double)
 
-/** Compact Position Reporting (airborne, 17-bit) decoding. */
+/** Compact Position Reporting (17-bit airborne and surface) decoding. */
 object Cpr {
     private const val NZ = 15
     private const val SCALE = 131072.0 // 2^17
@@ -82,6 +82,26 @@ object Cpr {
         val lat = dLat * (j + latC)
 
         val dLon = 360.0 / max(nl(lat) - i, 1)
+        val m = floor(ref.lon / dLon) + floor(0.5 + mod(ref.lon, dLon) / dLon - lonC)
+        val lon = dLon * (m + lonC)
+        return LatLon(lat, normalizeLon(lon))
+    }
+
+    /**
+     * Local decode of a surface position frame. Surface CPR packs the same 17 bits into a
+     * quarter of the airborne zone size (90° instead of 360°), so it needs a reference
+     * within ~45 NM: the receiver, or the aircraft's last known position.
+     */
+    fun surfaceLocal(cprLat: Int, cprLon: Int, odd: Boolean, ref: LatLon): LatLon {
+        val i = if (odd) 1 else 0
+        val latC = cprLat / SCALE
+        val lonC = cprLon / SCALE
+
+        val dLat = 90.0 / (60 - i)
+        val j = floor(ref.lat / dLat) + floor(0.5 + mod(ref.lat, dLat) / dLat - latC)
+        val lat = dLat * (j + latC)
+
+        val dLon = 90.0 / max(nl(lat) - i, 1)
         val m = floor(ref.lon / dLon) + floor(0.5 + mod(ref.lon, dLon) / dLon - lonC)
         val lon = dLon * (m + lonC)
         return LatLon(lat, normalizeLon(lon))

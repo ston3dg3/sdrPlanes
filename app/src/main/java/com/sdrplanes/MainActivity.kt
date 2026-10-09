@@ -8,24 +8,39 @@ import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import com.sdrplanes.service.Settings
 import com.sdrplanes.ui.MainScreen
 import com.sdrplanes.ui.theme.SdrPlanesTheme
+import com.sdrplanes.ui.theme.hud
 
 class MainActivity : ComponentActivity() {
     private val launchedByUsb = mutableStateOf(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // Always-dark UI: light status/navigation bar icons on transparent bars.
-        enableEdgeToEdge(
-            statusBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
-            navigationBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
-        )
         launchedByUsb.value = intent.isUsbAttach()
+        var settings by mutableStateOf(Settings.load(this))
         setContent {
-            SdrPlanesTheme {
-                MainScreen(autoStart = launchedByUsb.value)
+            SdrPlanesTheme(settings.theme) {
+                // Transparent bars; icon colour follows the active palette.
+                val dark = hud.isDark
+                LaunchedEffect(dark) {
+                    val style = if (dark) SystemBarStyle.dark(Color.TRANSPARENT)
+                    else SystemBarStyle.light(Color.TRANSPARENT, Color.TRANSPARENT)
+                    enableEdgeToEdge(statusBarStyle = style, navigationBarStyle = style)
+                }
+                MainScreen(
+                    settings = settings,
+                    onSettingsChange = {
+                        settings = it
+                        Settings.save(this, it)
+                    },
+                    autoStart = launchedByUsb.value,
+                )
             }
         }
     }

@@ -57,6 +57,8 @@ class RtlTcpSampleSource(
                 out.command(CMD_GAIN_MODE, 1)
                 out.command(CMD_GAIN, config.gainTenthsDb)
             }
+            // Only sent when wanted: servers without bias-tee support may not ignore it.
+            if (config.biasTee) out.command(CMD_BIAS_TEE, 1)
             out.flush()
 
             val buf = ByteArray(BUFFER_SIZE)
@@ -121,6 +123,7 @@ class RtlTcpSampleSource(
         private const val CMD_GAIN = 0x04
         private const val CMD_PPM = 0x05
         private const val CMD_AGC_MODE = 0x08
+        private const val CMD_BIAS_TEE = 0x0e
 
         private val TUNER_NAMES = listOf("Unknown", "E4000", "FC0012", "FC0013", "FC2580", "R820T", "R828D")
     }

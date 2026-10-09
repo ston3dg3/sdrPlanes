@@ -19,7 +19,10 @@ object RtlSdrDriver {
 
     fun startIntent(config: TunerConfig, port: Int = PORT): Intent =
         Intent(Intent.ACTION_VIEW).setData(
-            Uri.parse("iqsrc://-a $HOST -p $port -n 1 -f ${config.frequencyHz} -s ${config.sampleRate}")
+            Uri.parse(
+                "iqsrc://-a $HOST -p $port -n 1 -f ${config.frequencyHz} -s ${config.sampleRate}" +
+                    (config.gainTenthsDb?.let { " -g $it" } ?: "")
+            )
         )
 
     fun isInstalled(context: Context): Boolean =

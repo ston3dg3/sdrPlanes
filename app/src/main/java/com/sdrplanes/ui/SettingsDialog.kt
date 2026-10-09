@@ -35,24 +35,41 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import com.sdrplanes.sdr.usb.R82xxTuner
+import com.sdrplanes.db.AircraftDb
+import com.sdrplanes.decode.LatLon
 import com.sdrplanes.service.Settings
+import com.sdrplanes.ui.theme.ThemeMode
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.produceState
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import com.sdrplanes.service.SourceMode
 import com.sdrplanes.ui.theme.NightSky
 import com.sdrplanes.ui.theme.Phosphor
 import com.sdrplanes.ui.theme.PhosphorDim
 import com.sdrplanes.ui.theme.Plum
 import com.sdrplanes.ui.theme.RadarTeal
+import com.sdrplanes.ui.theme.Rust
 import com.sdrplanes.ui.theme.Sunset
 import kotlin.math.roundToInt
 
-/** R820T gain table (tenths of dB), as reported by rtl_test for this dongle. */
-private val R820T_GAINS = intArrayOf(
-    0, 9, 14, 27, 37, 77, 87, 125, 144, 157, 166, 197, 207, 229, 254,
-    280, 297, 328, 338, 364, 372, 386, 402, 421, 434, 439, 445, 480, 496,
-)
+private val R820T_GAINS = R82xxTuner.GAINS
 
 @Composable
-fun SettingsDialog(initial: Settings, onDismiss: () -> Unit, onSave: (Settings) -> Unit) {
+fun SettingsDialog(
+    initial: Settings,
+    receiver: LatLon?,
+    receiving: Boolean,
+    onDismiss: () -> Unit,
+    onRecord: () -> Unit,
+    onSave: (Settings) -> Unit,
+) {
+    val context = LocalContext.current
     var mode by remember { mutableStateOf(initial.mode) }
     var host by remember { mutableStateOf(initial.host) }
     var port by remember { mutableStateOf(initial.port.toString()) }
@@ -62,6 +79,14 @@ fun SettingsDialog(initial: Settings, onDismiss: () -> Unit, onSave: (Settings) 
         mutableFloatStateOf(R820T_GAINS.indices.minBy { kotlin.math.abs(R820T_GAINS[it] - g) }.toFloat())
     }
     var ppm by remember { mutableStateOf(initial.ppm.toString()) }
+    var sampleRate by remember { mutableStateOf(initial.sampleRate) }
+    var biasTee by remember { mutableStateOf(initial.biasTee) }
+    var theme by remember { mutableStateOf(initial.theme) }
+    val offline by OfflineMaps.state.collectAsStateWithLifecycle()
+    LaunchedEffect(Unit) { OfflineMaps.refresh(context) }
+    val db = produceState<AircraftDb?>(null) {
+        value = withContext(Dispatchers.IO) { runCatching { AircraftDb.open(context) }.getOrNull() }
+    }.value
 
     HudDialog(
         title = "Receiver settings",
@@ -76,6 +101,9 @@ fun SettingsDialog(initial: Settings, onDismiss: () -> Unit, onSave: (Settings) 
                         port = port.toIntOrNull()?.takeIf { it in 1..65535 } ?: initial.port,
                         gainTenthsDb = if (autoGain) null else R820T_GAINS[gainIdx.roundToInt()],
                         ppm = ppm.toIntOrNull() ?: 0,
+                        sampleRate = sampleRate,
+                        biasTee = biasTee,
+                        theme = theme,
                     )
                 )
             })
@@ -86,7 +114,10 @@ fun SettingsDialog(initial: Settings, onDismiss: () -> Unit, onSave: (Settings) 
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             HudLabel("Signal source")
-            ModeOption("RTL-SDR driver app", "USB dongle on this phone", mode == SourceMode.DRIVER_APP) {
+            ModeOption("USB dongle", "Built-in driver, dongle on this phone", mode == SourceMode.USB) {
+                mode = SourceMode.USB
+            }
+            ModeOption("RTL-SDR driver app", "Dongle on this phone via the driver app", mode == SourceMode.DRIVER_APP) {
                 mode = SourceMode.DRIVER_APP
             }
             ModeOption("Network rtl_tcp server", "PC, Raspberry Pi or emulator", mode == SourceMode.NETWORK) {
@@ -95,20 +126,13 @@ fun SettingsDialog(initial: Settings, onDismiss: () -> Unit, onSave: (Settings) 
             if (mode == SourceMode.NETWORK) {
                 RetroField(host, { host = it.trim() }, "Host (emulator: 127.0.0.1 + adb reverse)")
             }
-            RetroField(port, { port = it.filter(Char::isDigit) }, "Port", KeyboardType.Number)
+            if (mode != SourceMode.USB) {
+                RetroField(port, { port = it.filter(Char::isDigit) }, "Port", KeyboardType.Number)
+            }
 
             Spacer(Modifier.size(2.dp))
             HudLabel("Tuner")
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Auto gain", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-                Switch(
-                    autoGain, { autoGain = it },
-                    colors = SwitchDefaults.colors(
-                        checkedThumbColor = NightSky, checkedTrackColor = Sunset,
-                        uncheckedThumbColor = RadarTeal, uncheckedTrackColor = NightSky, uncheckedBorderColor = RadarTeal,
-                    ),
-                )
-            }
+            HudSwitch("Auto gain", autoGain) { autoGain = it }
             if (!autoGain) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("Gain", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
@@ -131,12 +155,108 @@ fun SettingsDialog(initial: Settings, onDismiss: () -> Unit, onSave: (Settings) 
                 ppm, { ppm = it.filter { c -> c.isDigit() || c == '-' } },
                 "Frequency correction (ppm)", KeyboardType.Number,
             )
+            Text("Sample rate", style = MaterialTheme.typography.bodyMedium)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                for (r in Settings.SAMPLE_RATES) {
+                    Box(Modifier.weight(1f)) {
+                        ModeOption(
+                            "%.1f MS/s".format(r / 1e6),
+                            if (r == 2_400_000) "Best decoding" else "Less CPU",
+                            sampleRate == r,
+                        ) { sampleRate = r }
+                    }
+                }
+            }
+            HudSwitch("Bias-tee (antenna power)", biasTee) { biasTee = it }
+            if (biasTee) {
+                Text(
+                    "Powers an LNA or filter through the coax. Only enable with a bias-tee capable dongle and powered gear – never with a DC-shorted antenna.",
+                    style = MaterialTheme.typography.labelSmall, color = Sunset,
+                )
+            }
+
+            Spacer(Modifier.size(2.dp))
+            HudLabel("Appearance")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                for ((m, label) in listOf(ThemeMode.SYSTEM to "System", ThemeMode.DARK to "Dark", ThemeMode.LIGHT to "Light")) {
+                    Box(Modifier.weight(1f)) { HudChip(label, theme == m, { theme = m }, Modifier.fillMaxWidth()) }
+                }
+            }
+
+            Spacer(Modifier.size(2.dp))
+            HudLabel("Offline map")
+            OfflineMapSection(offline, receiver)
+
+            Spacer(Modifier.size(2.dp))
+            HudLabel("Recording")
+            Text(
+                "Saves 30 s of raw IQ (8-bit, rtl_sdr format, ~150 MB) to Download/SdrPlanes – for offline analysis or bug reports.",
+                style = MaterialTheme.typography.labelSmall, color = PhosphorDim,
+            )
+            HudTextButton(
+                if (receiving) "Record 30 s of IQ" else "Start receiving to record",
+                onClick = { if (receiving) onRecord() }, accent = if (receiving) Sunset else PhosphorDim,
+            )
+
+            Spacer(Modifier.size(2.dp))
+            HudLabel("Data")
+            Text(
+                (db?.let { "Aircraft database: %,d aircraft, %s – data by Mictronics via wiedehopf/tar1090-db. ".format(it.size, it.source.substringAfterLast(' ')) }
+                    ?: "Aircraft database not loaded. ") +
+                    "Map © OpenFreeMap, OpenMapTiles, OpenStreetMap contributors. SdrPlanes is free software under the GPL-3.0-or-later.",
+                style = MaterialTheme.typography.labelSmall, color = PhosphorDim,
+            )
         }
     }
 }
 
 @Composable
-private fun RetroField(value: String, onChange: (String) -> Unit, label: String, keyboard: KeyboardType = KeyboardType.Text) {
+private fun OfflineMapSection(state: OfflineMapState, receiver: LatLon?) {
+    val context = LocalContext.current
+    val text = when (state) {
+        OfflineMapState.Unknown -> "Checking…"
+        OfflineMapState.None -> "No offline area. Downloads ${OfflineMaps.RADIUS_KM.toInt()} km around you (dark + light map, zoom ≤ 10, about 110 MB – use Wi-Fi)."
+        is OfflineMapState.Downloading -> "Downloading… %d%% · %.1f MB".format((state.progress * 100).toInt(), state.bytes / 1e6)
+        is OfflineMapState.Ready -> "Stored: %.0f km around %.2f, %.2f · %.1f MB".format(
+            OfflineMaps.RADIUS_KM, state.center.lat, state.center.lon, state.bytes / 1e6,
+        )
+        is OfflineMapState.Failed -> state.message
+    }
+    Text(text, style = MaterialTheme.typography.labelSmall, color = if (state is OfflineMapState.Failed) Rust else PhosphorDim)
+    if (state is OfflineMapState.Downloading) {
+        LinearProgressIndicator(
+            progress = { state.progress }, color = Sunset, trackColor = Plum, modifier = Modifier.fillMaxWidth(),
+        )
+        return
+    }
+    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        HudTextButton(
+            if (receiver == null) "Needs location" else if (state is OfflineMapState.Ready) "Update area" else "Download area",
+            onClick = { receiver?.let { OfflineMaps.download(context, it) } },
+            accent = if (receiver == null) PhosphorDim else Sunset,
+        )
+        if (state is OfflineMapState.Ready) {
+            HudTextButton("Delete", onClick = { OfflineMaps.delete(context) }, accent = RadarTeal)
+        }
+    }
+}
+
+@Composable
+fun HudSwitch(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(label, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+        Switch(
+            checked, onChange,
+            colors = SwitchDefaults.colors(
+                checkedThumbColor = NightSky, checkedTrackColor = Sunset,
+                uncheckedThumbColor = RadarTeal, uncheckedTrackColor = NightSky, uncheckedBorderColor = RadarTeal,
+            ),
+        )
+    }
+}
+
+@Composable
+fun RetroField(value: String, onChange: (String) -> Unit, label: String, keyboard: KeyboardType = KeyboardType.Text) {
     OutlinedTextField(
         value, onChange,
         label = { Text(label) },
@@ -155,7 +275,7 @@ private fun RetroField(value: String, onChange: (String) -> Unit, label: String,
 
 /** Selectable cut-corner tile with an indicator block. */
 @Composable
-private fun ModeOption(title: String, subtitle: String, selected: Boolean, onClick: () -> Unit) {
+fun ModeOption(title: String, subtitle: String, selected: Boolean, onClick: () -> Unit) {
     val shape = CutCornerShape(topStart = 10.dp, bottomEnd = 10.dp)
     val accent = if (selected) Sunset else RadarTeal
     Row(
