@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Palette from colour_palette.md (mirrors ui/theme/Color.kt). -->
+<resources>
+    <color name="sunset">#FFFCAA67</color>
+    <color name="rust">#FFB0413E</color>
+    <color name="phosphor">#FFFFFFC7</color>
+    <color name="radar_teal">#FF548687</color>
+    <color name="plum">#FF473335</color>
+    <color name="night_sky">#FF020122</color>
+</resources>

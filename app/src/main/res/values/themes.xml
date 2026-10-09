@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Dark window + splash in night sky so launch never flashes white. -->
+    <style name="Theme.SdrPlanes" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/night_sky</item>
+        <item name="android:colorAccent">@color/sunset</item>
+        <item name="android:windowSplashScreenBackground">@color/night_sky</item>
+    </style>
+</resources>

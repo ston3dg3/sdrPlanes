@@ -1,0 +1,34 @@
+# --- Gradle / build output ---
+.gradle/
+.kotlin/
+build/
+captures/
+.externalNativeBuild/
+.cxx/
+*.apk
+*.aab
+*.ap_
+*.dex
+output-metadata.json
+
+# --- Local machine config (SDK path, signing) ---
+local.properties
+*.jks
+*.keystore
+
+# --- Android Studio / IntelliJ ---
+.idea/
+*.iml
+*.ipr
+*.iws
+out/
+
+# --- OS / editor clutter ---
+.DS_Store
+Thumbs.db
+desktop.ini
+*.log
+*.hprof
+
+# --- Windows rtl-sdr tools (rtl_tcp etc.), not part of the app ---
+/sdrblog_tools/
